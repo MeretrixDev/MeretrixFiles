@@ -5,7 +5,11 @@ from sqlalchemy import func, select
 
 from app.models import Blob, File
 from app.models import utcnow
+from app.services.storage import hash_token
 
+
+def delete(client, public_id, token):
+    return client.delete(f"/f/{public_id}", headers={"X-Delete-Token": token})
 
 def upload(client, data: bytes, name: str = "note.txt", **form):
     return client.post(
@@ -86,3 +90,55 @@ def test_path_in_filename_is_stripped(client):
     info = upload(client, b"data", name="../../evil.txt").json()
 
     assert info["filename"] == "evil.txt"
+
+
+def test_delete_with_valid_token_removes_file(client):
+    info = upload(client, b"data" * 100).json()
+
+    resp = delete(client, info["public_id"], info["delete_token"])
+
+    assert resp.status_code == 204
+    assert client.get(f"/f/{info['public_id']}").status_code == 404
+
+
+def test_delete_with_wrong_token_is_forbidden_and_keeps_file(client):
+    info = upload(client, b"data" * 100).json()
+
+    resp = delete(client, info["public_id"], "wrong-token")
+
+    assert resp.status_code == 403
+    assert client.get(f"/f/{info['public_id']}").status_code == 200
+
+
+def test_delete_without_token_header_returns_422(client):
+    info = upload(client, b"data").json()
+
+    assert client.delete(f"/f/{info['public_id']}").status_code == 422
+
+
+def test_delete_unknown_id_returns_404(client):
+    assert delete(client, "doesnotexist", "any").status_code == 404
+
+
+def test_token_is_not_exposed_in_info_endpoint(client):
+    info = upload(client, b"data").json()
+
+    assert "delete_token" not in client.get(f"/f/{info['public_id']}/info").json()
+
+
+def test_only_hash_of_token_is_stored(client, db):
+    info = upload(client, b"data").json()
+
+    file = db.scalar(select(File).where(File.public_id == info["public_id"]))
+
+    assert file.delete_token_hash != info["delete_token"]
+    assert file.delete_token_hash == hash_token(info["delete_token"])
+
+
+def test_deleting_one_duplicate_keeps_the_other(client):
+    a = upload(client, b"same" * 100, name="a.txt").json()
+    b = upload(client, b"same" * 100, name="b.txt").json()
+
+    assert delete(client, a["public_id"], a["delete_token"]).status_code == 204
+
+    assert client.get(f"/f/{b['public_id']}").content == b"same" * 100

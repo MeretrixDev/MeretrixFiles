@@ -7,7 +7,8 @@ from app.services.storage import blob_path, delete_file, purge_expired, storage_
 
 
 def put(db, settings, data: bytes, name="a.txt", ttl=None):
-    return storage_upload(db, settings, [data], filename=name, ttl=ttl)
+    file, _token = storage_upload(db, settings, [data], filename=name, ttl=ttl)
+    return file
 
 
 def test_blob_is_deleted_only_with_its_last_file(db, settings):

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, Header, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -11,7 +11,7 @@ from app.config import Settings, get_settings
 from app.db import get_db
 from app.models import File
 from app.services.compression import FileTooLargeError, iter_decompressed
-from app.services.storage import blob_path, storage_upload
+from app.services.storage import blob_path, storage_upload, delete_file, verify_token
 
 router = APIRouter()
 
@@ -28,6 +28,11 @@ class FileInfo(BaseModel):
     algorithm: str
     saved_perc: float
     expires_at: datetime | None
+
+
+
+class UploadResult(FileInfo):
+    delete_token: str
 
 
 def _to_info(file: File, settings: Settings) -> FileInfo:
@@ -64,7 +69,7 @@ def _get_active_file(db: Session, public_id: str) -> File:
     return file
 
 
-@router.post("/upload", response_model=FileInfo, status_code=201)
+@router.post("/upload", response_model=UploadResult, status_code=201)
 def upload_file(
         file: UploadFile,
         ttl_hours: int | None = Form(None, ge=1, le=MAX_TTL_HOURS),
@@ -73,7 +78,7 @@ def upload_file(
 ):
     chunks = iter(lambda: file.file.read(settings.chunk_size), b"")
     try:
-        saved = storage_upload(
+        saved, token = storage_upload(
             db,
             settings,
             chunks,
@@ -83,7 +88,8 @@ def upload_file(
         )
     except FileTooLargeError:
         raise HTTPException(status_code=413, detail="File too large")
-    return _to_info(saved, settings)
+    info = _to_info(saved, settings)
+    return UploadResult(**info.model_dump(), delete_token=token)
 
 
 @router.get("/f/{public_id}")
@@ -110,3 +116,22 @@ def download_file(
         media_type=file.content_type,
         headers=headers,
     )
+
+
+@router.delete("/f/{public_id}", status_code=204)
+def delete_uploaded_file(
+    public_id: str,
+    db: Session = Depends(get_db),
+    x_delete_token: str = Header(...),
+    settings: Settings = Depends(get_settings),
+):
+    file = db.scalar(
+        select(File).options(joinedload(File.blob)).where(File.public_id==public_id)
+    )
+    if file is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not verify_token(x_delete_token, file.delete_token_hash):
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+    delete_file(db, settings, file)
+    return Response(status_code=204)

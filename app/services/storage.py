@@ -1,6 +1,9 @@
 import os
 import secrets
 import time
+import hmac
+import hashlib
+
 from datetime import timedelta
 from collections.abc import Iterable
 from pathlib import Path
@@ -13,6 +16,12 @@ from app.config import Settings
 from app.models import Blob, File, utcnow
 from app.services.compression import store_stream
 
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+def verify_token(token: str, expected_hash: str) -> bool:
+    return hmac.compare_digest(hash_token(token), expected_hash)
 
 def new_tmp_path(settings: Settings) -> Path:
     return settings.temp_dir / secrets.token_hex(16)
@@ -34,7 +43,7 @@ def storage_upload(
         filename: str,
         content_type: str | None = None,
         ttl: timedelta | None = None
-) -> File:
+) -> tuple[File, str]:
     tmp = new_tmp_path(settings)
     try:
         result = store_stream(
@@ -61,16 +70,18 @@ def storage_upload(
                 db.rollback()
                 blob = db.scalar(select(Blob).where(Blob.sha256 == result.sha256))
 
+        token = secrets.token_urlsafe(24)
         file = File(
             public_id=secrets.token_urlsafe(8),
             filename=Path(filename).name[:255] or "file",
             content_type=content_type or "application/octet-stream",
             blob_id=blob.id,
+            delete_token_hash=hash_token(token),
             expires_at=utcnow() + ttl if ttl else None,
         )
         db.add(file)
         db.commit()
-        return file
+        return file, token
     finally:
         tmp.unlink(missing_ok=True)
 
