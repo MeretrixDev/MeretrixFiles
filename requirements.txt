@@ -1,0 +1,10 @@
+fastapi == 0.143.0
+zstandard == 0.25.0
+sqlalchemy == 2.1.4
+pydantic-settings == 2.15.0
+uvicorn[standard]
+python-multipart
+
+pytest
+pytest-cov
+httpx
