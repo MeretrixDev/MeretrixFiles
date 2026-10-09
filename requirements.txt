@@ -3,7 +3,8 @@ zstandard == 0.25.0
 sqlalchemy == 2.1.4
 pydantic-settings == 2.15.0
 uvicorn[standard]
-python-multipart
+python-multipart == 0.0.32
+alembic == 1.20.0
 
 pytest
 pytest-cov

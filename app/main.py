@@ -35,7 +35,6 @@ async def _cleanup_loop(settings: Settings) -> None:
 async def lifespan(app: FastAPI):
     settings = get_settings()
     settings.ensure_dirs()
-    Base.metadata.create_all(engine)
     task = asyncio.create_task(_cleanup_loop(settings))
 
     yield
