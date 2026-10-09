@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -9,6 +10,10 @@ class Settings(BaseSettings):
         env_prefix="MRTRXFILES_",
         extra="ignore",
     )
+
+    secret_key: str = Field(min_length=32)
+    jwt_algorithm: str = "HS256"
+    access_token_expires_in_minutes: int = 60
 
     storage_dir: Path = Path("storage")
 

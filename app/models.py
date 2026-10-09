@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Boolean
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Boolean, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -42,4 +42,5 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow())
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 

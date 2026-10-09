@@ -8,6 +8,7 @@ os.environ["MRTRXFILES_STORAGE_DIR"] = str(_TMP / "storage")
 os.environ["MRTRXFILES_DATABASE_URL"] = f"sqlite:///{_TMP / 'test.db'}"
 os.environ["MRTRXFILES_MAX_UPLOAD_SIZE"] = str(1024 * 1024)  # 1 МБ, чтобы тест лимита был быстрым
 os.environ["MRTRXFILES_BASE_URL"] = "http://testserver"
+os.environ["MRTRXFILES_SECRET_KEY"] = "test-secret-key-for-pytest-only-0123456789"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
