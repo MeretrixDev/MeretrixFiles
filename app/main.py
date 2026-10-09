@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="MeretrixFiles",
     description="Файловый хостинг со сжатием на лету (zstd) и дедупликацией",
-    version="0.1.0",
+    version="0.1.1",
     lifespan=lifespan,
 )
 

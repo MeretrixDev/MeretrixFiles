@@ -76,10 +76,10 @@ def storage_upload(
 
 
 def delete_file(db: Session, settings: Settings, file: File) -> None:
-    blob = file.blob,
+    blob = file.blob
     path = blob_path(settings, blob.sha256, blob.algorithm)
 
-    db.delete(path)
+    db.delete(file)
     db.flush()
 
     remaining = db.scalar(
