@@ -30,6 +30,7 @@ class File(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow())
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     delete_token_hash: Mapped[str] = mapped_column(String(64))
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
 
     blob: Mapped[Blob] = relationship(back_populates="files")
 

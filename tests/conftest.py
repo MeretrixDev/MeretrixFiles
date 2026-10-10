@@ -50,5 +50,15 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture
+def make_user(client):
+    def _make(email="user@example.com", password="correct-horse-battery"):
+        client.post("/auth/register", json={"email": email, "password": password})
+        resp = client.post("/auth/login", data={"username": email, "password": password})
+        return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+    return _make
+
+
 def pytest_sessionfinish(session, exitstatus):
     shutil.rmtree(_TMP, ignore_errors=True)

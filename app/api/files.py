@@ -1,17 +1,18 @@
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, Header, Response
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, Header, Response, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.models import File
+from app.models import File, User, utcnow
 from app.services.compression import FileTooLargeError, iter_decompressed
 from app.services.storage import blob_path, storage_upload, delete_file, verify_token
+from app.api.deps import get_current_user, get_optional_user
 
 router = APIRouter()
 
@@ -73,6 +74,7 @@ def _get_active_file(db: Session, public_id: str) -> File:
 def upload_file(
         file: UploadFile,
         ttl_hours: int | None = Form(None, ge=1, le=MAX_TTL_HOURS),
+        user: User | None = Depends(get_optional_user),
         db: Session = Depends(get_db),
         settings: Settings = Depends(get_settings),
 ):
@@ -85,6 +87,7 @@ def upload_file(
             filename=file.filename or "file",
             content_type=file.content_type,
             ttl=timedelta(hours=ttl_hours) if ttl_hours else None,
+            owner_id=user.id if user else None,
         )
     except FileTooLargeError:
         raise HTTPException(status_code=413, detail="File too large")
@@ -122,7 +125,8 @@ def download_file(
 def delete_uploaded_file(
     public_id: str,
     db: Session = Depends(get_db),
-    x_delete_token: str = Header(...),
+    x_delete_token: str | None = Header(None),
+    user: User | None = Depends(get_optional_user),
     settings: Settings = Depends(get_settings),
 ):
     file = db.scalar(
@@ -130,8 +134,40 @@ def delete_uploaded_file(
     )
     if file is None:
         raise HTTPException(status_code=404, detail="File not found")
-    if not verify_token(x_delete_token, file.delete_token_hash):
-        raise HTTPException(status_code=403, detail="Invalid token")
+
+    is_owner = user is not None and file.owner_id == user.id
+    token_ok = x_delete_token is not None and verify_token(
+        x_delete_token, file.delete_token_hash
+    )
+
+    if not (is_owner or token_ok):
+        raise HTTPException(status_code=403, detail="Not allowed to delete file")
 
     delete_file(db, settings, file)
     return Response(status_code=204)
+
+
+@router.get("/users/me/files", response_model=list[FileInfo])
+def my_files(
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+        user: User | None = Depends(get_current_user),
+        db: Session = Depends(get_db),
+        settings: Settings = Depends(get_settings),
+):
+    rows = db.scalars(
+        select(File)
+        .options(joinedload(File.blob))
+        .where(
+            File.owner_id == user.id,
+            or_(
+                File.expires_at.is_(None),
+                File.expires_at > utcnow()
+            ),
+        )
+        .order_by(File.created_at.desc(), File.id.desc())
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return [_to_info(file, settings) for file in rows]
+

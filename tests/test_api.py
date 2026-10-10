@@ -3,8 +3,7 @@ from urllib.parse import quote
 
 from sqlalchemy import func, select
 
-from app.models import Blob, File
-from app.models import utcnow
+from app.models import Blob, File, utcnow
 from app.services.storage import hash_token
 
 
@@ -110,12 +109,6 @@ def test_delete_with_wrong_token_is_forbidden_and_keeps_file(client):
     assert client.get(f"/f/{info['public_id']}").status_code == 200
 
 
-def test_delete_without_token_header_returns_422(client):
-    info = upload(client, b"data").json()
-
-    assert client.delete(f"/f/{info['public_id']}").status_code == 422
-
-
 def test_delete_unknown_id_returns_404(client):
     assert delete(client, "doesnotexist", "any").status_code == 404
 
@@ -142,3 +135,10 @@ def test_deleting_one_duplicate_keeps_the_other(client):
     assert delete(client, a["public_id"], a["delete_token"]).status_code == 204
 
     assert client.get(f"/f/{b['public_id']}").content == b"same" * 100
+
+
+def test_delete_without_credentials_is_forbidden(client):
+    info = upload(client, b"data").json()
+
+    assert client.delete(f"/f/{info['public_id']}").status_code == 403
+

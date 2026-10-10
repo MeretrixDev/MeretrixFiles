@@ -42,7 +42,8 @@ def storage_upload(
         *,
         filename: str,
         content_type: str | None = None,
-        ttl: timedelta | None = None
+        ttl: timedelta | None = None,
+        owner_id: int | None = None,
 ) -> tuple[File, str]:
     tmp = new_tmp_path(settings)
     try:
@@ -77,6 +78,7 @@ def storage_upload(
             content_type=content_type or "application/octet-stream",
             blob_id=blob.id,
             delete_token_hash=hash_token(token),
+            owner_id=owner_id,
             expires_at=utcnow() + ttl if ttl else None,
         )
         db.add(file)
