@@ -9,6 +9,7 @@ from app.api import files, auth
 from app.config import Settings, get_settings
 from app.db import Base, SessionLocal, engine
 from app.services.storage import cleanup_tmp, purge_expired
+from app.services.ratelimit import limiter
 
 log = logging.getLogger("filehost")
 
@@ -18,6 +19,7 @@ def _cleanup_once(settings: Settings) -> None:
     removed_tmp = cleanup_tmp(settings)
     with SessionLocal() as db:
         removed_files = purge_expired(db, settings)
+    limiter.purge()
     if removed_tmp or removed_files:
         log.info(f"Cleanup: tmp={removed_tmp}, files={removed_files}")
 

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, limit_login, limit_register
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.models import User
@@ -43,7 +43,7 @@ def _normalize(email: str) -> str:
     return email.strip().lower()
 
 
-@router.post("/auth/register", response_model=UserOut, status_code=201)
+@router.post("/auth/register", response_model=UserOut, status_code=201, dependencies=[Depends(limit_register)])
 def register(body: RegisterIn, db: Session = Depends(get_db)):
     email = _normalize(body.email)
     if db.scalar(select(User).where(User.email == email)) is not None:
@@ -60,7 +60,7 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
     return user
 
 
-@router.post("/auth/login", response_model=TokenOut)
+@router.post("/auth/login", response_model=TokenOut, dependencies=[Depends(limit_login)])
 def login(
         form: OAuth2PasswordRequestForm = Depends(),
         db: Session = Depends(get_db),

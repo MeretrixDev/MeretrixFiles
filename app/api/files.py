@@ -12,7 +12,7 @@ from app.db import get_db
 from app.models import File, User, utcnow
 from app.services.compression import FileTooLargeError, iter_decompressed
 from app.services.storage import blob_path, storage_upload, delete_file, verify_token
-from app.api.deps import get_current_user, get_optional_user
+from app.api.deps import get_current_user, get_optional_user, limit_upload
 
 router = APIRouter()
 
@@ -70,7 +70,7 @@ def _get_active_file(db: Session, public_id: str) -> File:
     return file
 
 
-@router.post("/upload", response_model=UploadResult, status_code=201)
+@router.post("/upload", response_model=UploadResult, status_code=201, dependencies=[Depends(limit_upload)])
 def upload_file(
         file: UploadFile,
         ttl_hours: int | None = Form(None, ge=1, le=MAX_TTL_HOURS),
