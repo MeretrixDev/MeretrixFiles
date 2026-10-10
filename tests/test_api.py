@@ -142,3 +142,17 @@ def test_delete_without_credentials_is_forbidden(client):
 
     assert client.delete(f"/f/{info['public_id']}").status_code == 403
 
+
+def test_very_long_content_type_does_not_break_upload(client):
+    resp = client.post(
+        "/upload", files={"file": ("a.txt", b"data", "text/" + "x" * 300)}
+    )
+
+    assert resp.status_code == 201
+
+
+def test_nul_byte_in_filename_is_removed(client):
+    resp = client.post("/upload", files={"file": ("a\x00b.txt", b"data", "text/plain")})
+
+    assert resp.status_code == 201
+    assert "\x00" not in resp.json()["filename"]

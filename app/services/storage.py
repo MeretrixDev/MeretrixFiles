@@ -74,8 +74,8 @@ def storage_upload(
         token = secrets.token_urlsafe(24)
         file = File(
             public_id=secrets.token_urlsafe(8),
-            filename=Path(filename).name[:255] or "file",
-            content_type=content_type or "application/octet-stream",
+            filename=Path(filename).name.replace("\x00", "")[:255] or "file",
+            content_type=(content_type or "application/octet-stream")[:127],
             blob_id=blob.id,
             delete_token_hash=hash_token(token),
             owner_id=owner_id,

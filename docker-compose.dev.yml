@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: filehost
+      POSTGRES_PASSWORD: filehost   # только для локальной разработки
+      POSTGRES_DB: filehost
+    ports:
+      - "127.0.0.1:5432:5432"       # слушаем только localhost
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

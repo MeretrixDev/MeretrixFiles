@@ -4,8 +4,9 @@ import tempfile
 from pathlib import Path
 
 _TMP = Path(tempfile.mkdtemp(prefix="filehost-tests-"))
+_TEST_DB_URL = os.environ.get("TEST_DATABASE_URL")
 os.environ["MRTRXFILES_STORAGE_DIR"] = str(_TMP / "storage")
-os.environ["MRTRXFILES_DATABASE_URL"] = f"sqlite:///{_TMP / 'test.db'}"
+os.environ["MRTRXFILES_DATABASE_URL"] = _TEST_DB_URL or f"sqlite:///{_TMP / 'test.db'}"
 os.environ["MRTRXFILES_MAX_UPLOAD_SIZE"] = str(1024 * 1024)  # 1 МБ, чтобы тест лимита был быстрым
 os.environ["MRTRXFILES_BASE_URL"] = "http://testserver"
 os.environ["MRTRXFILES_SECRET_KEY"] = "test-secret-key-for-pytest-only-0123456789"
@@ -22,12 +23,15 @@ from app.services.ratelimit import limiter  # noqa: E402
 @pytest.fixture(autouse=True)
 def clean_state():
     settings = get_settings()
+    url = settings.database_url
+
     assert _TMP in settings.storage_dir.resolve().parents, (
         f"Тесты используют реальное хранилище: {settings.storage_dir}"
     )
-    assert str(_TMP) in settings.database_url, (
+    assert str(_TMP) in url or url.rsplit("/", 1)[-1].endswith("_test"), (
         f"Тесты используют реальную БД: {settings.database_url}"
     )
+
     shutil.rmtree(settings.storage_dir, ignore_errors=True)
     settings.ensure_dirs()
     Base.metadata.drop_all(engine)
