@@ -10,12 +10,17 @@ from app.config import Settings, get_settings
 from app.models import User
 from app.services.security import decode_access_token
 from app.services.ratelimit import limiter
+from app.services.blobstore import BlobStore, make_blob_storage
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 
 def _unauthorized(detail: str) -> HTTPException:
     return HTTPException(status_code=401, detail=detail, headers={"WWW-Authenticate": "Bearer"})
+
+
+def get_blob_store(settings: Settings = Depends(get_settings)) -> BlobStore:
+    return make_blob_storage(settings)
 
 
 def get_optional_user(

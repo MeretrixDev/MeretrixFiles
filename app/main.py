@@ -10,6 +10,7 @@ from app.config import Settings, get_settings
 from app.db import Base, SessionLocal, engine
 from app.services.storage import cleanup_tmp, purge_expired
 from app.services.ratelimit import limiter
+from app.services.blobstore import make_blob_storage
 
 log = logging.getLogger("filehost")
 
@@ -17,8 +18,9 @@ CLEANUP_INTERVAL_SECONDS = 600
 
 def _cleanup_once(settings: Settings) -> None:
     removed_tmp = cleanup_tmp(settings)
+    store = make_blob_storage(settings)
     with SessionLocal() as db:
-        removed_files = purge_expired(db, settings)
+        removed_files = purge_expired(db, store)
     limiter.purge()
     if removed_tmp or removed_files:
         log.info(f"Cleanup: tmp={removed_tmp}, files={removed_files}")

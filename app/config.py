@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     max_upload_size: int = 5 * 1024 * 1024 #500MB
     chunk_size: int = 1024 * 1024 #1MB
 
+    frame_size: int = Field(1024 * 1024, ge=64 * 1024, le=64 * 1024 * 1024)
+
     compress_level: int = 3
 
     database_url: str = "sqlite:///./meretrixfiles.db"

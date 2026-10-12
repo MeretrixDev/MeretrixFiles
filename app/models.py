@@ -14,7 +14,7 @@ class Blob(Base):
     sha256: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     original_size: Mapped[int] = mapped_column(BigInteger)
     stored_size: Mapped[int] = mapped_column(BigInteger)
-    algorithm: Mapped[str] = mapped_column(String(64), default="zstd") # zstd или none
+    algorithm: Mapped[str] = mapped_column(String(64), default="zstd-seekable") # zstd-seekable или none
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow())
 
     files: Mapped[list["File"]] = relationship(back_populates="blob")

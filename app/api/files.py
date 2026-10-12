@@ -10,9 +10,12 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.models import File, User, utcnow
-from app.services.compression import FileTooLargeError, iter_decompressed
-from app.services.storage import blob_path, storage_upload, delete_file, verify_token
-from app.api.deps import get_current_user, get_optional_user, limit_upload
+from app.services.blobstore import BlobStore, blob_key
+from app.services.compression import BlobReader, FileTooLargeError
+from app.services.ranges import RangeNotSatisfiable, parse_range
+from app.services.seekable import CorruptBlobError
+from app.services.storage import delete_file, storage_upload, verify_token
+from app.api.deps import get_blob_store, get_current_user, get_optional_user, limit_upload
 
 router = APIRouter()
 
@@ -77,13 +80,15 @@ def upload_file(
         user: User | None = Depends(get_optional_user),
         db: Session = Depends(get_db),
         settings: Settings = Depends(get_settings),
+        store: BlobStore = Depends(get_blob_store),
 ):
     chunks = iter(lambda: file.file.read(settings.chunk_size), b"")
     try:
         saved, token = storage_upload(
-            db,
-            settings,
-            chunks,
+            db=db,
+            settings=settings,
+            store=store,
+            chunks=chunks,
             filename=file.filename or "file",
             content_type=file.content_type,
             ttl=timedelta(hours=ttl_hours) if ttl_hours else None,
@@ -98,27 +103,52 @@ def upload_file(
 @router.get("/f/{public_id}")
 def download_file(
     public_id: str,
+    range_header: str | None = Header(None, alias="Range"),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    store: BlobStore = Depends(get_blob_store),
 ):
     file = _get_active_file(db, public_id)
     blob = file.blob
-    path = blob_path(settings, blob.sha256, blob.algorithm)
-    if not path.exists():
-        raise HTTPException(status_code=500, detail="File not found")
+    key = blob_key(blob.sha256, blob.algorithm)
+    if not store.exists(key):
+        raise HTTPException(500, "Stored file is missing")
+    try:
+        reader = BlobReader(store, key, blob.algorithm, settings.chunk_size)
+    except CorruptBlobError:
+        raise HTTPException(500, "Stored file is corrupted")
+    size = blob.original_size
+    if reader.size != size:  # размер в БД и в самом файле должны совпадать
+        raise HTTPException(500, "Stored file is corrupted")
 
     headers = {
-        # filename*= (RFC 5987) корректно передаёт кириллицу и пробелы
         "Content-Disposition": f"attachment; filename*=UTF-8''{quote(file.filename)}",
-        "Content-Length": str(blob.original_size),
         "X-Content-Type-Options": "nosniff",
+        "Accept-Ranges": "bytes",
+        "ETag": f'"{blob.sha256}"',  # хэш содержимого
     }
 
+    try:
+        byte_range = parse_range(range_header, size)
+    except RangeNotSatisfiable:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+
+    if byte_range is None:
+        status, start, end = 200, 0, size - 1
+    else:
+        status = 206
+        start, end = byte_range
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    headers["Content-Length"] = str(end - start + 1)
+
     return StreamingResponse(
-        iter_decompressed(path, blob.algorithm, settings.chunk_size),
+        reader.iter_range(start, end),
+        status_code=status,
         media_type=file.content_type,
         headers=headers,
     )
+
+
 
 
 @router.delete("/f/{public_id}", status_code=204)
@@ -127,7 +157,7 @@ def delete_uploaded_file(
     db: Session = Depends(get_db),
     x_delete_token: str | None = Header(None),
     user: User | None = Depends(get_optional_user),
-    settings: Settings = Depends(get_settings),
+    store: BlobStore = Depends(get_blob_store),
 ):
     file = db.scalar(
         select(File).options(joinedload(File.blob)).where(File.public_id==public_id)
@@ -143,7 +173,7 @@ def delete_uploaded_file(
     if not (is_owner or token_ok):
         raise HTTPException(status_code=403, detail="Not allowed to delete file")
 
-    delete_file(db, settings, file)
+    delete_file(db, store, file)
     return Response(status_code=204)
 
 

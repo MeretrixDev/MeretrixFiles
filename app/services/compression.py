@@ -1,11 +1,13 @@
 import hashlib
 import itertools
-import zstandard as zstd
 
 from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
+
+from app.services.blobstore import BlobStore
+from app.services.seekable import SeekableWriter, SeekTable, iter_plain_range, read_seek_table
 
 class FileTooLargeError(Exception):
     """Raised when file too large"""
@@ -17,6 +19,9 @@ class StoreResult:
     stored_size: int # размер на диске
     algo: str # zstd или none
 
+
+ALGO_ZSTD = "zstd-seekable"
+ALGO_NONE = "none"
 
 # Форматы, которые уже сжаты
 _MAGIC_PREFIXES = (
@@ -54,10 +59,18 @@ def is_already_compressed(filename: str, head: bytes) -> bool:
         return True
     return False
 
-def store_stream(chunks: Iterable[bytes], dst: Path, *, filename: str, max_size: int, level: int = 3) -> StoreResult:
+def store_stream(
+        chunks: Iterable[bytes],
+        dst: Path,
+        *,
+        filename: str,
+        max_size: int,
+        level: int = 3,
+        frame_size: int = 1024 * 1024,
+) -> StoreResult:
     it = iter(chunks)
     head = next(it, b"")
-    algo = "none" if is_already_compressed(filename, head) else "zstd"
+    algo = ALGO_NONE if is_already_compressed(filename, head) else ALGO_ZSTD
     stream = itertools.chain((head,), it)
 
     sha = hashlib.sha256()
@@ -65,9 +78,10 @@ def store_stream(chunks: Iterable[bytes], dst: Path, *, filename: str, max_size:
 
     try:
         with dst.open("wb") as raw, ExitStack() as stack:
-            if algo == "zstd":
-                cctx = zstd.ZstdCompressor(level=level)
-                sink = stack.enter_context(cctx.stream_writer(raw, closefd=False))
+            if algo == ALGO_ZSTD:
+                sink = stack.enter_context(
+                    SeekableWriter(raw, level=level, frame_size=frame_size)
+                )
             else:
                 sink = raw
 
@@ -88,12 +102,28 @@ def store_stream(chunks: Iterable[bytes], dst: Path, *, filename: str, max_size:
         algo=algo,
     )
 
-def iter_decompressed(path: Path, algo: str, chunk_size: int) -> Iterator[bytes]:
-    with path.open("rb") as f:
-        if algo == "zstd":
-            with zstd.ZstdDecompressor().stream_reader(f) as reader:
-                while chunk := reader.read(chunk_size):
-                    yield chunk
-        else:
-            while chunk := f.read(chunk_size):
-                yield chunk
+
+class BlobReader:
+    def __init__(self, store: BlobStore, key: str, algorithm: str, chunk_size: int) -> None:
+        self._store = store
+        self._key = key
+        self._chunk_size = chunk_size
+
+        self._table: SeekTable | None = (
+            read_seek_table(store, key) if algorithm == ALGO_ZSTD else None
+        )
+
+        self.size = self._table.size if self._table else store.size(key)
+
+    def iter_range(self, start: int, end: int) -> Iterator[bytes]:
+        if self._table is not None:
+            yield from iter_plain_range(self._store, self._key, self._table, start, end)
+            return
+        pos = start
+        while pos <= end:
+            data = self._store.read_range(self._key, pos, min(self._chunk_size, end - pos + 1))
+            if not data:
+                break
+            yield data
+            pos += len(data)
+

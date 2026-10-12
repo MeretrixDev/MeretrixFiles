@@ -1,3 +1,6 @@
+import hashlib
+import random
+
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -6,6 +9,7 @@ from sqlalchemy import func, select
 from app.models import Blob, File, utcnow
 from app.services.storage import hash_token
 
+BIG = random.Random(7).randbytes(300_000)  # 5 кадров по 64 КБ (FRAME_SIZE в conftest)
 
 def delete(client, public_id, token):
     return client.delete(f"/f/{public_id}", headers={"X-Delete-Token": token})
@@ -18,6 +22,10 @@ def upload(client, data: bytes, name: str = "note.txt", **form):
     )
 
 
+def get_range(client, public_id, value):
+    return client.get(f"/f/{public_id}", headers={"Range": value})
+
+
 def test_upload_then_download_returns_identical_bytes(client):
     data = b"hello world " * 5000
 
@@ -26,7 +34,7 @@ def test_upload_then_download_returns_identical_bytes(client):
     info = resp.json()
     assert info["original_size"] == len(data)
     assert info["stored_size"] < info["original_size"]
-    assert info["algorithm"] == "zstd"
+    assert info["algorithm"] == "zstd-seekable"
 
     dl = client.get(f"/f/{info['public_id']}")
     assert dl.status_code == 200
@@ -156,3 +164,58 @@ def test_nul_byte_in_filename_is_removed(client):
 
     assert resp.status_code == 201
     assert "\x00" not in resp.json()["filename"]
+
+
+def test_range_across_frame_boundary_returns_exact_slice(client):
+    pid = upload(client, BIG, name="data.txt").json()["public_id"]
+
+    resp = get_range(client, pid, "bytes=65530-65545")  # граница кадров на 65536
+
+    assert resp.status_code == 206
+    assert resp.content == BIG[65530:65546]
+    assert resp.headers["content-range"] == f"bytes 65530-65545/{len(BIG)}"
+    assert resp.headers["content-length"] == "16"
+
+
+def test_open_ended_and_suffix_ranges(client):
+    pid = upload(client, BIG, name="data.txt").json()["public_id"]
+
+    assert get_range(client, pid, "bytes=299000-").content == BIG[299000:]
+    assert get_range(client, pid, "bytes=-100").content == BIG[-100:]
+
+
+def test_unsatisfiable_range_returns_416(client):
+    pid = upload(client, BIG, name="data.txt").json()["public_id"]
+
+    resp = get_range(client, pid, f"bytes={len(BIG)}-")
+
+    assert resp.status_code == 416
+    assert resp.headers["content-range"] == f"bytes */{len(BIG)}"
+
+
+def test_malformed_range_is_ignored(client):
+    pid = upload(client, BIG, name="data.txt").json()["public_id"]
+
+    resp = get_range(client, pid, "bytes=5-3")
+
+    assert resp.status_code == 200
+    assert resp.content == BIG
+
+
+def test_download_advertises_ranges_and_content_etag(client):
+    pid = upload(client, BIG, name="data.txt").json()["public_id"]
+
+    resp = client.get(f"/f/{pid}")
+
+    assert resp.headers["accept-ranges"] == "bytes"
+    assert resp.headers["etag"] == f'"{hashlib.sha256(BIG).hexdigest()}"'
+
+
+def test_range_works_for_files_stored_raw(client):
+    info = upload(client, BIG, name="photo.jpg").json()
+
+    resp = get_range(client, info["public_id"], "bytes=100000-100099")
+
+    assert info["algorithm"] == "none"
+    assert resp.content == BIG[100000:100100]
+

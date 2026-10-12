@@ -10,6 +10,7 @@ os.environ["MRTRXFILES_DATABASE_URL"] = _TEST_DB_URL or f"sqlite:///{_TMP / 'tes
 os.environ["MRTRXFILES_MAX_UPLOAD_SIZE"] = str(1024 * 1024)  # 1 МБ, чтобы тест лимита был быстрым
 os.environ["MRTRXFILES_BASE_URL"] = "http://testserver"
 os.environ["MRTRXFILES_SECRET_KEY"] = "test-secret-key-for-pytest-only-0123456789"
+os.environ["MRTRXFILES_FRAME_SIZE"] = str(64 * 1024)
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -18,6 +19,7 @@ from app.config import get_settings  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services.ratelimit import limiter  # noqa: E402
+from app.services.blobstore import make_blob_storage
 
 
 @pytest.fixture(autouse=True)
@@ -65,6 +67,11 @@ def make_user(client):
         return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
     return _make
+
+
+@pytest.fixture
+def store(settings):
+    return make_blob_storage(settings)
 
 
 def pytest_sessionfinish(session, exitstatus):

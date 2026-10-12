@@ -1,4 +1,3 @@
-import os
 import secrets
 import time
 import hmac
@@ -15,6 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import Settings
 from app.models import Blob, File, utcnow
 from app.services.compression import store_stream
+from app.services.blobstore import BlobStore, blob_key
 
 
 def hash_token(token: str) -> str:
@@ -26,18 +26,11 @@ def verify_token(token: str, expected_hash: str) -> bool:
 def new_tmp_path(settings: Settings) -> Path:
     return settings.temp_dir / secrets.token_hex(16)
 
-def blob_path(settings: Settings, sha256: str, algo: str) -> Path:
-    suffix = "zstd" if algo == "zstd" else "raw"
-    return settings.storage_dir / sha256[:2] / f"{sha256}.{suffix}"
-
-def _commit_file(settings: Settings, tmp: Path, sha256: str, algo: str) -> None:
-    final = blob_path(settings, sha256, algo)
-    final.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(tmp, final)
 
 def storage_upload(
         db: Session,
         settings: Settings,
+        store: BlobStore,
         chunks: Iterable[bytes],
         *,
         filename: str,
@@ -52,12 +45,13 @@ def storage_upload(
             tmp,
             filename=filename,
             max_size=settings.max_upload_size,
-            level=settings.compress_level
+            level=settings.compress_level,
+            frame_size=settings.frame_size
         )
 
         blob = db.scalar(select(Blob).where(Blob.sha256 == result.sha256))
         if blob is None:
-            _commit_file(settings, tmp, result.sha256, result.algo)
+            store.put(blob_key(result.sha256, result.algo), tmp)
             blob = Blob(
                 sha256=result.sha256,
                 original_size=result.orig_size,
@@ -88,23 +82,21 @@ def storage_upload(
         tmp.unlink(missing_ok=True)
 
 
-def delete_file(db: Session, settings: Settings, file: File) -> None:
+def delete_file(db: Session, store: BlobStore, file: File) -> None:
     blob = file.blob
-    path = blob_path(settings, blob.sha256, blob.algorithm)
+    key = blob_key(blob.sha256, blob.algorithm)
 
     db.delete(file)
     db.flush()
-
     remaining = db.scalar(
         select(func.count()).select_from(File).where(File.blob_id == blob.id)
     )
-
     if remaining == 0:
         db.delete(blob)
     db.commit()
 
     if remaining == 0:
-        path.unlink(missing_ok=True)
+        store.delete(key)
 
 
 def cleanup_tmp(settings: Settings, max_age_seconds: int = 3600) -> int:
@@ -117,12 +109,13 @@ def cleanup_tmp(settings: Settings, max_age_seconds: int = 3600) -> int:
     return removed
 
 
-def purge_expired(db: Session, settings: Settings) -> int:
+def purge_expired(db: Session, store: BlobStore) -> int:
     expired = db.scalars(
         select(File)
         .options(joinedload(File.blob))
         .where(File.expires_at.is_not(None), File.expires_at < utcnow())
     ).all()
     for file in expired:
-        delete_file(db, settings, file)
+        delete_file(db, store, file)
     return len(expired)
+
