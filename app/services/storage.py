@@ -115,7 +115,14 @@ def purge_expired(db: Session, store: BlobStore) -> int:
         .options(joinedload(File.blob))
         .where(File.expires_at.is_not(None), File.expires_at < utcnow())
     ).all()
+    removed = 0
     for file in expired:
-        delete_file(db, store, file)
-    return len(expired)
+        try:
+            delete_file(db, store, file)
+            removed += 1
+        except Exception:
+            db.rollback()
+            #log.exception(f"Failed to purge expired file: {file}")
+    return removed
+
 

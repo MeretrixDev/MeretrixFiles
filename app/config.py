@@ -33,6 +33,9 @@ class Settings(BaseSettings):
 
     base_url: str = "http://localhost:8000"
 
+    cleanup_in_app: bool = True
+    cleanup_interval_seconds: int = Field(600, ge=10)
+
     @property
     def temp_dir(self) -> Path:
         return self.storage_dir / "temp"
@@ -44,3 +47,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
