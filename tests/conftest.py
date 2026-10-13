@@ -21,6 +21,8 @@ from app.main import app  # noqa: E402
 from app.services.ratelimit import limiter  # noqa: E402
 from app.services.blobstore import make_blob_storage
 
+from sqlalchemy import text
+
 
 @pytest.fixture(autouse=True)
 def clean_state():
@@ -72,6 +74,20 @@ def make_user(client):
 @pytest.fixture
 def store(settings):
     return make_blob_storage(settings)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _drop_stale_pg_sessions():
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.connect() as conn:
+        name = conn.execute(text("SELECT current_database()")).scalar()
+        assert name.endswith("_test"), f"refusing to touch database {name}"
+        conn.execute(text(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+        ))
+        conn.commit()
 
 
 def pytest_sessionfinish(session, exitstatus):

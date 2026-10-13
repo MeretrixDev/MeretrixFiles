@@ -50,13 +50,29 @@ def test_cli_requires_a_command():
 
 
 @pytest.mark.skipif(engine.dialect.name != "postgresql", reason="advisory-блокировки есть только в PostgreSQL")
+def test_cleanup_does_not_leave_the_lock_behind(settings):
+    run_cleanup(settings)
+
+    with engine.connect() as c:
+        held = c.execute(
+            text(
+                "SELECT count(*) FROM pg_locks "
+                "WHERE locktype = 'advisory' AND classid = CAST(:c AS oid)"
+            ),
+            {"c": LOCK_KEY >> 32},
+        ).scalar()
+
+    assert held == 0
+
+
+@pytest.mark.skipif(engine.dialect.name != "postgresql", reason="advisory-блокировки есть только в PostgreSQL")
 def test_cleanup_is_skipped_while_another_runner_holds_the_lock(settings):
     with engine.connect() as other:
         other.execute(text("SELECT pg_advisory_lock(:k)"), {"k": LOCK_KEY})
-
-        result = run_cleanup(settings)
-
-        other.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": LOCK_KEY})
+        try:
+            result = run_cleanup(settings)
+        finally:
+            other.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": LOCK_KEY})
 
     assert result.skipped
 

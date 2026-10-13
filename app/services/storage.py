@@ -7,7 +7,7 @@ from datetime import timedelta
 from collections.abc import Iterable
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
@@ -25,6 +25,15 @@ def verify_token(token: str, expected_hash: str) -> bool:
 
 def new_tmp_path(settings: Settings) -> Path:
     return settings.temp_dir / secrets.token_hex(16)
+
+
+def lock_blob(db: Session, sha256: str) -> None:
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+        {"k": f"blob:{sha256}"},
+    )
 
 
 def storage_upload(
@@ -49,6 +58,7 @@ def storage_upload(
             frame_size=settings.frame_size
         )
 
+        lock_blob(db, result.sha256)
         blob = db.scalar(select(Blob).where(Blob.sha256 == result.sha256))
         if blob is None:
             store.put(blob_key(result.sha256, result.algo), tmp)
@@ -84,8 +94,10 @@ def storage_upload(
 
 def delete_file(db: Session, store: BlobStore, file: File) -> None:
     blob = file.blob
-    key = blob_key(blob.sha256, blob.algorithm)
+    sha, algorithm = blob.sha256, blob.algorithm
+    key = blob_key(sha, algorithm)
 
+    lock_blob(db, sha)
     db.delete(file)
     db.flush()
     remaining = db.scalar(
@@ -95,8 +107,18 @@ def delete_file(db: Session, store: BlobStore, file: File) -> None:
         db.delete(blob)
     db.commit()
 
-    if remaining == 0:
-        store.delete(key)
+    if remaining:
+        return
+
+    lock_blob(db, sha)
+    try:
+        recreated = db.scalar(
+            select(Blob.id).where(Blob.sha256 == sha, Blob.algorithm == algorithm)
+        )
+        if recreated is None:
+            store.delete(key)
+    finally:
+        db.rollback()
 
 
 def cleanup_tmp(settings: Settings, max_age_seconds: int = 3600) -> int:

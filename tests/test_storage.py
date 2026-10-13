@@ -6,6 +6,7 @@ from app.models import Blob, File
 from app.services.storage import delete_file, purge_expired, storage_upload
 from app.services.blobstore import blob_key
 from app.services import storage
+from app.db import SessionLocal
 
 
 def put(db, settings, store, data: bytes, name="a.txt", ttl=None):
@@ -57,4 +58,31 @@ def test_purge_continues_after_a_failure(db, settings, store, monkeypatch):
 
     assert purge_expired(db, store) == 1
     assert db.scalar(select(func.count()).select_from(File)) == 1  # один удалён, один остался
+
+
+def test_delete_does_not_remove_file_recreated_between_phases(
+    db, settings, store, monkeypatch
+):
+    data = b"payload" * 100
+    f1 = put(db, settings, store, data, "a.txt")
+    key = key_of(f1)
+    real_lock = storage.lock_blob
+    state = {"calls": 0, "injected": False}
+
+    def lock_with_injection(session, sha):
+        state["calls"] += 1
+        # 1-й вызов: фаза 1 удаления. 2-й: начало фазы 2, как раз в этот момент
+        # «параллельная» загрузка успевает создать Blob заново
+        if state["calls"] == 2 and not state["injected"]:
+            state["injected"] = True
+            with SessionLocal() as other:
+                storage_upload(other, settings, store, [data], filename="b.txt")
+        real_lock(session, sha)
+
+    monkeypatch.setattr(storage, "lock_blob", lock_with_injection)
+
+    delete_file(db, store, f1)
+
+    assert store.exists(key)  # файл новой загрузки на месте
+    assert db.scalar(select(func.count()).select_from(Blob)) == 1
 

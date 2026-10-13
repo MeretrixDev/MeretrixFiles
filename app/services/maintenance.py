@@ -28,20 +28,14 @@ def single_runner(eng: Engine) -> Iterator[bool]:
     with eng.connect() as conn:
         got = bool(
             conn.execute(
-                text("SELECT pg_try_advisory_lock(:k)"),
+                text("SELECT pg_try_advisory_xact_lock(:k)"),
                 {"k": LOCK_KEY}
             ).scalar()
         )
-        conn.commit()
         try:
             yield got
         finally:
-            if got:
-                conn.execute(
-                    text("SELECT pg_try_advisory_lock(:k)"),
-                    {"k": LOCK_KEY}
-                )
-                conn.commit()
+            conn.rollback()
 
 
 def run_cleanup(settings: Settings) -> CleanupResult:
