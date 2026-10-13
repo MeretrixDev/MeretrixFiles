@@ -62,8 +62,8 @@ def client():
 @pytest.fixture
 def make_user(client):
     def _make(email="user@example.com", password="correct-horse-battery"):
-        client.post("/auth/register", json={"email": email, "password": password})
-        resp = client.post("/auth/login", data={"username": email, "password": password})
+        client.post("/api/v1/auth/register", json={"email": email, "password": password})
+        resp = client.post("/api/v1/auth/login", data={"username": email, "password": password})
         return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
     return _make

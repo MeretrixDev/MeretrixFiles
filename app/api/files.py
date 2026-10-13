@@ -18,6 +18,7 @@ from app.services.storage import delete_file, storage_upload, verify_token
 from app.api.deps import get_blob_store, get_current_user, get_optional_user, limit_upload
 
 router = APIRouter()
+public_router = APIRouter()
 
 MAX_TTL_HOURS = 24 * 365
 
@@ -100,7 +101,7 @@ def upload_file(
     return UploadResult(**info.model_dump(), delete_token=token)
 
 
-@router.get("/f/{public_id}")
+@public_router.get("/f/{public_id}")
 def download_file(
     public_id: str,
     range_header: str | None = Header(None, alias="Range"),
@@ -147,8 +148,6 @@ def download_file(
         media_type=file.content_type,
         headers=headers,
     )
-
-
 
 
 @router.delete("/f/{public_id}", status_code=204)

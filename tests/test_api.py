@@ -12,11 +12,11 @@ from app.services.storage import hash_token
 BIG = random.Random(7).randbytes(300_000)  # 5 кадров по 64 КБ (FRAME_SIZE в conftest)
 
 def delete(client, public_id, token):
-    return client.delete(f"/f/{public_id}", headers={"X-Delete-Token": token})
+    return client.delete(f"/api/v1/f/{public_id}", headers={"X-Delete-Token": token})
 
 def upload(client, data: bytes, name: str = "note.txt", **form):
     return client.post(
-        "/upload",
+        "/api/v1/upload",
         files={"file": (name, data, "text/plain")},
         data=form,
     )
@@ -148,19 +148,19 @@ def test_deleting_one_duplicate_keeps_the_other(client):
 def test_delete_without_credentials_is_forbidden(client):
     info = upload(client, b"data").json()
 
-    assert client.delete(f"/f/{info['public_id']}").status_code == 403
+    assert client.delete(f"/api/v1/f/{info['public_id']}").status_code == 403
 
 
 def test_very_long_content_type_does_not_break_upload(client):
     resp = client.post(
-        "/upload", files={"file": ("a.txt", b"data", "text/" + "x" * 300)}
+        "/api/v1/upload", files={"file": ("a.txt", b"data", "text/" + "x" * 300)}
     )
 
     assert resp.status_code == 201
 
 
 def test_nul_byte_in_filename_is_removed(client):
-    resp = client.post("/upload", files={"file": ("a\x00b.txt", b"data", "text/plain")})
+    resp = client.post("/api/v1/upload", files={"file": ("a\x00b.txt", b"data", "text/plain")})
 
     assert resp.status_code == 201
     assert "\x00" not in resp.json()["filename"]
@@ -218,4 +218,17 @@ def test_range_works_for_files_stored_raw(client):
 
     assert info["algorithm"] == "none"
     assert resp.content == BIG[100000:100100]
+
+
+def test_old_unversioned_api_paths_are_gone(client):
+    resp = client.post("/upload", files={"file": ("a.txt", b"data", "text/plain")})
+
+    assert resp.status_code == 404
+
+
+def test_share_url_points_to_unversioned_public_path(client):
+    info = upload(client, b"data").json()
+
+    assert info["url"] == f"http://testserver/f/{info['public_id']}"
+    assert client.get(f"/f/{info['public_id']}").status_code == 200
 

@@ -67,13 +67,13 @@ def set_limits(settings):
 
 def login(client, password="wrong-password"):
     return client.post(
-        "/auth/login", data={"username": "user@example.com", "password": password}
+        "/api/v1/auth/login", data={"username": "user@example.com", "password": password}
     )
 
 
 def test_login_is_blocked_after_limit_even_with_correct_password(client, set_limits):
     client.post(
-        "/auth/register",
+        "/api/v1/auth/register",
         json={"email": "user@example.com", "password": "correct-horse-battery"},
     )
     set_limits(rate_login_per_minute=3)
@@ -91,7 +91,7 @@ def test_register_is_limited(client, set_limits):
 
     codes = [
         client.post(
-            "/auth/register",
+            "/api/v1/auth/register",
             json={"email": f"u{i}@example.com", "password": "correct-horse-battery"},
         ).status_code
         for i in range(3)
@@ -104,7 +104,7 @@ def test_upload_is_limited(client, set_limits):
     set_limits(rate_upload_per_minute=2)
 
     codes = [
-        client.post("/upload", files={"file": ("a.txt", b"data", "text/plain")}).status_code
+        client.post("/api/v1/upload", files={"file": ("a.txt", b"data", "text/plain")}).status_code
         for _ in range(3)
     ]
 
@@ -116,7 +116,7 @@ def test_limits_are_per_endpoint(client, set_limits):
     login(client)
     assert login(client).status_code == 429
 
-    resp = client.post("/upload", files={"file": ("a.txt", b"data", "text/plain")})
+    resp = client.post("/api/v1/upload", files={"file": ("a.txt", b"data", "text/plain")})
 
     assert resp.status_code == 201
 

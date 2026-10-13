@@ -12,7 +12,7 @@ from app.services.security import decode_access_token
 from app.services.ratelimit import limiter
 from app.services.blobstore import BlobStore, make_blob_storage
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 
 def _unauthorized(detail: str) -> HTTPException:

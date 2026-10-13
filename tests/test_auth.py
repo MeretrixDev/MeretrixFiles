@@ -7,11 +7,11 @@ from app.models import User
 
 
 def register(client, email="User@Example.com", password="correct-horse-battery"):
-    return client.post("/auth/register", json={"email": email, "password": password})
+    return client.post("/api/v1/auth/register", json={"email": email, "password": password})
 
 
 def login(client, email="user@example.com", password="correct-horse-battery"):
-    return client.post("/auth/login", data={"username": email, "password": password})
+    return client.post("/api/v1/auth/login", data={"username": email, "password": password})
 
 
 def bearer(token):
@@ -60,7 +60,7 @@ def test_login_returns_token_that_opens_me(client):
     register(client)
 
     token = login(client).json()["access_token"]
-    me = client.get("/users/me", headers=bearer(token))
+    me = client.get("/api/v1/users/me", headers=bearer(token))
 
     assert me.status_code == 200
     assert me.json()["email"] == "user@example.com"
@@ -83,25 +83,25 @@ def test_wrong_password_and_unknown_user_look_the_same(client):
 
 
 def test_me_requires_token(client):
-    assert client.get("/users/me").status_code == 401
+    assert client.get("/api/v1/users/me").status_code == 401
 
 
 def test_garbage_token_is_rejected(client):
-    assert client.get("/users/me", headers=bearer("garbage")).status_code == 401
+    assert client.get("/api/v1/users/me", headers=bearer("garbage")).status_code == 401
 
 
 def test_expired_token_is_rejected(client, settings):
     register(client)
     token = make_token(settings, 1, timedelta(minutes=-1))
 
-    assert client.get("/users/me", headers=bearer(token)).status_code == 401
+    assert client.get("/api/v1/users/me", headers=bearer(token)).status_code == 401
 
 
 def test_token_signed_with_other_key_is_rejected(client, settings):
     register(client)
     token = make_token(settings, 1, timedelta(minutes=5), key="x" * 40)
 
-    assert client.get("/users/me", headers=bearer(token)).status_code == 401
+    assert client.get("/api/v1/users/me", headers=bearer(token)).status_code == 401
 
 
 def test_inactive_user_cannot_login_or_use_old_token(client, db):
@@ -112,4 +112,4 @@ def test_inactive_user_cannot_login_or_use_old_token(client, db):
     db.commit()
 
     assert login(client).status_code == 401
-    assert client.get("/users/me", headers=bearer(token)).status_code == 401
+    assert client.get("/api/v1/users/me", headers=bearer(token)).status_code == 401

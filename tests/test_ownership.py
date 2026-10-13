@@ -7,7 +7,7 @@ from app.models import File, User, utcnow
 
 def upload(client, data=b"data" * 100, name="note.txt", headers=None, **form):
     return client.post(
-        "/upload", files={"file": (name, data, "text/plain")}, data=form, headers=headers
+        "/api/v1/upload", files={"file": (name, data, "text/plain")}, data=form, headers=headers
     )
 
 
@@ -39,13 +39,13 @@ def test_my_files_lists_only_own_files(client, make_user):
     upload(client, b"b" * 100, name="bob.txt", headers=bob)
     upload(client, b"c" * 100, name="anon.txt")
 
-    names = [f["filename"] for f in client.get("/users/me/files", headers=alice).json()]
+    names = [f["filename"] for f in client.get("/api/v1/users/me/files", headers=alice).json()]
 
     assert names == ["alice.txt"]
 
 
 def test_my_files_requires_auth(client):
-    assert client.get("/users/me/files").status_code == 401
+    assert client.get("/api/v1/users/me/files").status_code == 401
 
 
 def test_my_files_hides_expired_and_supports_paging(client, db, make_user):
@@ -56,8 +56,8 @@ def test_my_files_hides_expired_and_supports_paging(client, db, make_user):
     old.expires_at = utcnow() - timedelta(minutes=1)
     db.commit()
 
-    everything = client.get("/users/me/files", headers=headers).json()
-    first_page = client.get("/users/me/files?limit=1", headers=headers).json()
+    everything = client.get("/api/v1/users/me/files", headers=headers).json()
+    first_page = client.get("/api/v1/users/me/files?limit=1", headers=headers).json()
 
     assert {f["filename"] for f in everything} == {"f1.txt", "f2.txt"}
     assert len(first_page) == 1
@@ -67,7 +67,7 @@ def test_owner_can_delete_without_token(client, make_user):
     headers = make_user()
     info = upload(client, headers=headers).json()
 
-    resp = client.delete(f"/f/{info['public_id']}", headers=headers)
+    resp = client.delete(f"/api/v1/f/{info['public_id']}", headers=headers)
 
     assert resp.status_code == 204
     assert client.get(f"/f/{info['public_id']}").status_code == 404
@@ -78,7 +78,7 @@ def test_other_user_cannot_delete_without_token(client, make_user):
     bob = make_user("bob@example.com")
     info = upload(client, headers=alice).json()
 
-    resp = client.delete(f"/f/{info['public_id']}", headers=bob)
+    resp = client.delete(f"/api/v1/f/{info['public_id']}", headers=bob)
 
     assert resp.status_code == 403
     assert client.get(f"/f/{info['public_id']}").status_code == 200
@@ -88,7 +88,7 @@ def test_delete_token_still_works_for_owned_file(client, make_user):
     info = upload(client, headers=make_user()).json()
 
     resp = client.delete(
-        f"/f/{info['public_id']}", headers={"X-Delete-Token": info["delete_token"]}
+        f"/api/v1/f/{info['public_id']}", headers={"X-Delete-Token": info["delete_token"]}
     )
 
     assert resp.status_code == 204
