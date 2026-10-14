@@ -16,6 +16,8 @@ from app.services.ranges import RangeNotSatisfiable, parse_range
 from app.services.seekable import CorruptBlobError
 from app.services.storage import delete_file, storage_upload, verify_token
 from app.api.deps import get_blob_store, get_current_user, get_optional_user, limit_upload
+from app.services.policy import TtlNotAllowed, resolve_ttl_hours
+
 
 router = APIRouter()
 public_router = APIRouter()
@@ -96,6 +98,16 @@ def upload_file(
             status_code=401, detail="Private files require authentication",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    try:
+        effective_ttl = resolve_ttl_hours(user, ttl_hours, settings)
+    except TtlNotAllowed as e:
+        raise HTTPException(
+            422,
+            f"Anonymous files can be stored for at most {e.max_hours} hours. "
+            "Sign in to store files longer."
+        )
+
     chunks = iter(lambda: file.file.read(settings.chunk_size), b"")
     try:
         saved, token = storage_upload(
@@ -105,7 +117,7 @@ def upload_file(
             chunks=chunks,
             filename=file.filename or "file",
             content_type=file.content_type,
-            ttl=timedelta(hours=ttl_hours) if ttl_hours else None,
+            ttl=timedelta(hours=effective_ttl) if effective_ttl else None,
             owner_id=user.id if user else None,
             visibility=visibility,
         )

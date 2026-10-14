@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     frame_size: int = Field(1024 * 1024, ge=64 * 1024, le=64 * 1024 * 1024)
 
+    anon_ttl_hours: int = Field(24, ge=1, le=24 * 365)
+
     compress_level: int = 3
 
     database_url: str = "sqlite:///./meretrixfiles.db"
