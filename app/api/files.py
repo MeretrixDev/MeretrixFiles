@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.models import File, User, utcnow
+from app.models import File, User, utcnow, Visibility
 from app.services.blobstore import BlobStore, blob_key
 from app.services.compression import BlobReader, FileTooLargeError
 from app.services.ranges import RangeNotSatisfiable, parse_range
@@ -33,11 +33,15 @@ class FileInfo(BaseModel):
     algorithm: str
     saved_perc: float
     expires_at: datetime | None
-
+    visibility: str
 
 
 class UploadResult(FileInfo):
     delete_token: str
+
+
+class VisibilityUpdate(BaseModel):
+    visibility: Visibility
 
 
 def _to_info(file: File, settings: Settings) -> FileInfo:
@@ -53,10 +57,11 @@ def _to_info(file: File, settings: Settings) -> FileInfo:
         algorithm=blob.algorithm,
         saved_perc=round(saved, 1),
         expires_at=file.expires_at,
+        visibility=file.visibility,
     )
 
 
-def _get_active_file(db: Session, public_id: str) -> File:
+def _get_active_file(db: Session, public_id: str, user: User | None = None) -> File:
     file = db.scalar(
         select(File).options(
             joinedload(File.blob)
@@ -64,6 +69,8 @@ def _get_active_file(db: Session, public_id: str) -> File:
     )
     if file is None:
         raise HTTPException(status_code=404, detail="File not found")
+    if file.visibility == "private" and (user is None or file.owner_id != user.id):
+        raise HTTPException(404, "File not found")
 
     if file.expires_at is not None:
         expires = file.expires_at
@@ -78,11 +85,17 @@ def _get_active_file(db: Session, public_id: str) -> File:
 def upload_file(
         file: UploadFile,
         ttl_hours: int | None = Form(None, ge=1, le=MAX_TTL_HOURS),
+        visibility: Visibility = Form("unlisted"),
         user: User | None = Depends(get_optional_user),
         db: Session = Depends(get_db),
         settings: Settings = Depends(get_settings),
         store: BlobStore = Depends(get_blob_store),
 ):
+    if visibility == "private" and user is None:
+        raise HTTPException(
+            status_code=401, detail="Private files require authentication",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     chunks = iter(lambda: file.file.read(settings.chunk_size), b"")
     try:
         saved, token = storage_upload(
@@ -94,6 +107,7 @@ def upload_file(
             content_type=file.content_type,
             ttl=timedelta(hours=ttl_hours) if ttl_hours else None,
             owner_id=user.id if user else None,
+            visibility=visibility,
         )
     except FileTooLargeError:
         raise HTTPException(status_code=413, detail="File too large")
@@ -108,8 +122,9 @@ def download_file(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     store: BlobStore = Depends(get_blob_store),
+    user: User | None = Depends(get_optional_user),
 ):
-    file = _get_active_file(db, public_id)
+    file = _get_active_file(db, public_id, user)
     blob = file.blob
     key = blob_key(blob.sha256, blob.algorithm)
     if not store.exists(key):
@@ -128,6 +143,9 @@ def download_file(
         "Accept-Ranges": "bytes",
         "ETag": f'"{blob.sha256}"',  # хэш содержимого
     }
+
+    if file.visibility == "private":
+        headers["Cache-Control"] = "private, no-store"
 
     try:
         byte_range = parse_range(range_header, size)
@@ -170,7 +188,9 @@ def delete_uploaded_file(
     )
 
     if not (is_owner or token_ok):
-        raise HTTPException(status_code=403, detail="Not allowed to delete file")
+        if file.visibility == "private":
+            raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=403, detail="Not allowed to delete this file")
 
     delete_file(db, store, file)
     return Response(status_code=204)
@@ -199,4 +219,20 @@ def my_files(
         .offset(offset)
     ).all()
     return [_to_info(file, settings) for file in rows]
+
+
+@router.patch("/f/{public_id}", response_model=FileInfo)
+def update_visibility(
+        public_id: str,
+        body: VisibilityUpdate,
+        user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
+        settings: Settings = Depends(get_settings),
+):
+    file = _get_active_file(db, public_id, user)
+    if file.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to update this file")
+    file.visibility = body.visibility
+    db.commit()
+    return _to_info(file, settings)
 

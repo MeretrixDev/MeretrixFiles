@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
 from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Boolean, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
+from typing import Literal
 from app.db import Base
+
+Visibility = Literal["unlisted", "private"]
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -31,6 +33,9 @@ class File(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     delete_token_hash: Mapped[str] = mapped_column(String(64))
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
+    visibility: Mapped[str] = mapped_column(
+        String(16), default="unlisted", server_default="unlisted"
+    )
 
     blob: Mapped[Blob] = relationship(back_populates="files")
 

@@ -46,6 +46,7 @@ def storage_upload(
         content_type: str | None = None,
         ttl: timedelta | None = None,
         owner_id: int | None = None,
+        visibility: str = "unlisted",
 ) -> tuple[File, str]:
     tmp = new_tmp_path(settings)
     try:
@@ -84,6 +85,7 @@ def storage_upload(
             delete_token_hash=hash_token(token),
             owner_id=owner_id,
             expires_at=utcnow() + ttl if ttl else None,
+            visibility=visibility
         )
         db.add(file)
         db.commit()
