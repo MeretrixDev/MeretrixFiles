@@ -67,10 +67,16 @@ def store_stream(
         max_size: int,
         level: int = 3,
         frame_size: int = 1024 * 1024,
+        compress: bool | None = None,
 ) -> StoreResult:
     it = iter(chunks)
     head = next(it, b"")
-    algo = ALGO_NONE if is_already_compressed(filename, head) else ALGO_ZSTD
+
+    if compress is None:
+        algo = ALGO_NONE if is_already_compressed(filename, head) else ALGO_ZSTD
+    else:
+        algo = ALGO_ZSTD if compress else ALGO_NONE
+
     stream = itertools.chain((head,), it)
 
     sha = hashlib.sha256()

@@ -1,6 +1,14 @@
 from app.config import Settings
 from app. models import User
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class UploadLimits:
+    max_size: int
+    quota_bytes: int | None = None # общая квота
+
 
 class TtlNotAllowed(Exception):
     def __init__(self, max_hours: int) -> None:
@@ -22,4 +30,10 @@ def resolve_ttl_hours(
     if requested > limit:
         raise TtlNotAllowed(limit)
     return requested
+
+
+def limit_for(user: User | None, settings: Settings) -> UploadLimits:
+    if user is None:
+        return UploadLimits(min(settings.anon_max_upload_size, settings.max_upload_size))
+    return UploadLimits(settings.max_upload_size, settings.user_quota_bytes)
 

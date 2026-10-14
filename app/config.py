@@ -22,12 +22,15 @@ class Settings(BaseSettings):
 
     storage_dir: Path = Path("storage")
 
-    max_upload_size: int = 5 * 1024 * 1024 #500MB
+    max_upload_size: int = 500 * 1024 * 1024 #500MB
     chunk_size: int = 1024 * 1024 #1MB
 
     frame_size: int = Field(1024 * 1024, ge=64 * 1024, le=64 * 1024 * 1024)
 
+    user_quota_bytes: int = Field(5 * 1024**3, ge=0)
     anon_ttl_hours: int = Field(24, ge=1, le=24 * 365)
+    anon_max_upload_size: int = Field(100 * 1024**2, ge=1)
+    max_files_per_upload: int = Field(50, ge=1, le=1000)
 
     compress_level: int = 3
 

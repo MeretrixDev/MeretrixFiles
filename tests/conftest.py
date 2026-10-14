@@ -51,6 +51,15 @@ def settings():
 
 
 @pytest.fixture
+def override_settings(settings):
+    def _apply(**overrides):
+        app.dependency_overrides[get_settings] = lambda: settings.model_copy(update=overrides)
+
+    yield _apply
+    app.dependency_overrides.pop(get_settings, None)
+
+
+@pytest.fixture
 def db():
     with SessionLocal() as session:
         yield session

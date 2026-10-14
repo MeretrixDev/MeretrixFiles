@@ -1,7 +1,10 @@
+import zipfile
+
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
+from collections.abc import Iterator
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, Header, Response, Query
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, Header, Response, Query, File as FileField
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, or_
@@ -10,13 +13,16 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.models import File, User, utcnow, Visibility
+from app.api.deps import get_blob_store, get_current_user, get_optional_user, limit_upload
+
+from app.services.archive import archive_filename, iter_zip, safe_name, unique_names
 from app.services.blobstore import BlobStore, blob_key
 from app.services.compression import BlobReader, FileTooLargeError
 from app.services.ranges import RangeNotSatisfiable, parse_range
 from app.services.seekable import CorruptBlobError
-from app.services.storage import delete_file, storage_upload, verify_token
-from app.api.deps import get_blob_store, get_current_user, get_optional_user, limit_upload
-from app.services.policy import TtlNotAllowed, resolve_ttl_hours
+from app.services.storage import delete_file, storage_upload, verify_token, QuotaExceededError
+from app.services.policy import TtlNotAllowed, limit_for, resolve_ttl_hours
+from app.services.quota import get_usage
 
 
 router = APIRouter()
@@ -36,6 +42,15 @@ class FileInfo(BaseModel):
     saved_perc: float
     expires_at: datetime | None
     visibility: str
+
+
+class UsageOut(BaseModel):
+    files: int
+    used_bytes: int
+    quota_bytes: int
+    remaining_bytes: int
+    stored_bytes: int
+    saved_perc: float
 
 
 class UploadResult(FileInfo):
@@ -83,46 +98,80 @@ def _get_active_file(db: Session, public_id: str, user: User | None = None) -> F
     return file
 
 
+def _read_chunks(upload: UploadFile, size:int) -> Iterator[bytes]:
+    return iter(lambda: upload.file.read(size), b"")
+
+
 @router.post("/upload", response_model=UploadResult, status_code=201, dependencies=[Depends(limit_upload)])
 def upload_file(
-        file: UploadFile,
-        ttl_hours: int | None = Form(None, ge=1, le=MAX_TTL_HOURS),
-        visibility: Visibility = Form("unlisted"),
-        user: User | None = Depends(get_optional_user),
-        db: Session = Depends(get_db),
-        settings: Settings = Depends(get_settings),
-        store: BlobStore = Depends(get_blob_store),
+    files: list[UploadFile] = FileField(
+        ..., alias="file",
+    ),
+    ttl_hours: int | None = Form(
+        None, ge=1, le=MAX_TTL_HOURS,
+    ),
+    visibility: Visibility = Form("unlisted"),
+    archive_name: str | None = Form(
+        None, max_length=200
+    ),
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    store: BlobStore = Depends(get_blob_store),
 ):
+    if len(files) > settings.max_files_per_upload:
+        raise HTTPException(422, f"At most {settings.max_files_per_upload} files per upload")
     if visibility == "private" and user is None:
         raise HTTPException(
-            status_code=401, detail="Private files require authentication",
+            401, "Private files require authentication",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     try:
         effective_ttl = resolve_ttl_hours(user, ttl_hours, settings)
     except TtlNotAllowed as e:
         raise HTTPException(
             422,
             f"Anonymous files can be stored for at most {e.max_hours} hours. "
-            "Sign in to store files longer."
+            "Sign in to store files longer.",
         )
 
-    chunks = iter(lambda: file.file.read(settings.chunk_size), b"")
+    limits = limit_for(user, settings)
+    if len(files) == 1:
+        filename = files[0].filename or "file"
+        content_type = files[0].content_type
+        chunks = _read_chunks(files[0], settings.chunk_size)
+        compress = None  # решит автоопределение
+    else:
+        names = unique_names([safe_name(f.filename) for f in files])
+        chunks = iter_zip(
+            [(n, _read_chunks(f, settings.chunk_size)) for n, f in zip(names, files)],
+            force_zip64=limits.max_size >= zipfile.ZIP64_LIMIT,
+        )
+        filename = archive_filename(archive_name, utcnow())
+        content_type = "application/zip"
+        compress = True  # внутри ZIP без сжатия, сжимает хранилище
+
     try:
         saved, token = storage_upload(
-            db=db,
-            settings=settings,
-            store=store,
-            chunks=chunks,
-            filename=file.filename or "file",
-            content_type=file.content_type,
+            db, settings, store, chunks,
+            filename=filename,
+            content_type=content_type,
             ttl=timedelta(hours=effective_ttl) if effective_ttl else None,
             owner_id=user.id if user else None,
             visibility=visibility,
+            compress=compress,
+            limits=limits,
+        )
+    except QuotaExceededError as e:
+        raise HTTPException(
+            413, f"Storage quota exceeded: {e.used} of {e.quota} bytes used"
         )
     except FileTooLargeError:
-        raise HTTPException(status_code=413, detail="File too large")
+        hint = ""
+        if user is None and limits.max_size < settings.max_upload_size:
+            hint = f" Sign in to upload up to {settings.max_upload_size} bytes."
+        raise HTTPException(413, f"Upload exceeds the limit of {limits.max_size} bytes.{hint}")
+
     info = _to_info(saved, settings)
     return UploadResult(**info.model_dump(), delete_token=token)
 
@@ -247,4 +296,23 @@ def update_visibility(
     file.visibility = body.visibility
     db.commit()
     return _to_info(file, settings)
+
+
+@router.get("/users/me/usage", response_model=UsageOut)
+def my_usage(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    usage = get_usage(db, user.id)
+    quota = settings.user_quota_bytes
+    saved = (1 - usage.stored_bytes / usage.used_bytes) * 100 if usage.used_bytes else 0.0
+    return UsageOut(
+        files=usage.files,
+        used_bytes=usage.used_bytes,
+        quota_bytes=quota,
+        remaining_bytes=max(quota - usage.used_bytes, 0),
+        stored_bytes=usage.stored_bytes,
+        saved_perc=round(saved, 1),
+    )
 

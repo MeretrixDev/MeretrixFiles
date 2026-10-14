@@ -13,8 +13,11 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import Settings
 from app.models import Blob, File, utcnow
-from app.services.compression import store_stream
+from app.services.compression import store_stream, FileTooLargeError
 from app.services.blobstore import BlobStore, blob_key
+from app.services.archive import safe_name
+from app.services.policy import UploadLimits
+from app.services.quota import get_usage
 
 
 def hash_token(token: str) -> str:
@@ -27,37 +30,76 @@ def new_tmp_path(settings: Settings) -> Path:
     return settings.temp_dir / secrets.token_hex(16)
 
 
-def lock_blob(db: Session, sha256: str) -> None:
-    if db.get_bind().dialect.name != "postgresql":
+def _xact_lock(db: Session, key: str) -> None:
+    if db.get_bind().dialect.name != 'postgresql':
         return
     db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
-        {"k": f"blob:{sha256}"},
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": key}
     )
 
 
+def lock_blob(db: Session, sha256: str) -> None:
+    _xact_lock(db, f"blob:{sha256}")
+
+
+def lock_user(db: Session, user_id: int) -> None:
+    _xact_lock(db, f"user:{user_id}")
+
+
+class QuotaExceededError(Exception):
+    def __init__(self, used: int, quota: int) -> None:
+        super().__init__(f"Quota exceeded: {used} of {quota} bytes used")
+        self.used = used
+        self.quota = quota
+
+
 def storage_upload(
-        db: Session,
-        settings: Settings,
-        store: BlobStore,
-        chunks: Iterable[bytes],
-        *,
-        filename: str,
-        content_type: str | None = None,
-        ttl: timedelta | None = None,
-        owner_id: int | None = None,
-        visibility: str = "unlisted",
+    db: Session,
+    settings: Settings,
+    store: BlobStore,
+    chunks: Iterable[bytes],
+    *,
+    filename: str,
+    content_type: str | None = None,
+    ttl: timedelta | None = None,
+    owner_id: int | None = None,
+    visibility: str = "unlisted",
+    compress: bool | None = None,
+    limits: UploadLimits | None = None,
 ) -> tuple[File, str]:
+    limits = limits or UploadLimits(settings.max_upload_size)
+    max_size = limits.max_size
+    used = 0
+    quota_left: int | None = None
+    if owner_id is not None and limits.quota_bytes is not None:
+        used = get_usage(db, owner_id).used_bytes
+        quota_left = max(limits.quota_bytes - used, 0)
+        max_size = min(max_size, quota_left)
+    db.commit()
+
     tmp = new_tmp_path(settings)
     try:
-        result = store_stream(
-            chunks,
-            tmp,
-            filename=filename,
-            max_size=settings.max_upload_size,
-            level=settings.compress_level,
-            frame_size=settings.frame_size
-        )
+        try:
+            result = store_stream(
+                chunks,
+                tmp,
+                filename=filename,
+                max_size=max_size,
+                level=settings.compress_level,
+                frame_size=settings.frame_size,
+                compress=compress,
+            )
+        except FileTooLargeError:
+            if quota_left is not None and quota_left < limits.max_size:
+                raise QuotaExceededError(used, limits.quota_bytes) from None
+            raise
+
+        if quota_left is not None:
+            lock_user(db, owner_id)
+            used = get_usage(db, owner_id).used_bytes
+            if used + result.orig_size > limits.quota_bytes:
+                db.rollback()
+                raise QuotaExceededError(used, limits.quota_bytes)
 
         lock_blob(db, result.sha256)
         blob = db.scalar(select(Blob).where(Blob.sha256 == result.sha256))
@@ -79,13 +121,13 @@ def storage_upload(
         token = secrets.token_urlsafe(24)
         file = File(
             public_id=secrets.token_urlsafe(8),
-            filename=Path(filename).name.replace("\x00", "")[:255] or "file",
+            filename=safe_name(filename),
             content_type=(content_type or "application/octet-stream")[:127],
             blob_id=blob.id,
             delete_token_hash=hash_token(token),
             owner_id=owner_id,
+            visibility=visibility,
             expires_at=utcnow() + ttl if ttl else None,
-            visibility=visibility
         )
         db.add(file)
         db.commit()
