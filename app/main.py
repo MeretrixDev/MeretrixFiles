@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI
 
 from app import models  # noqa: F401 (импорт нужен, чтобы create_all увидел таблицы)
-from app.api import files, auth
+from app.api import files, auth, stats
 from app.config import Settings, get_settings
 from app.services.maintenance import run_cleanup
 from app.services.ratelimit import limiter
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="MeretrixFiles",
     description="Файловый хостинг со сжатием на лету (zstd) и дедупликацией",
-    version="0.7.0",
+    version="0.7.1",
     lifespan=lifespan,
 )
 
@@ -57,6 +57,7 @@ API_PREFIX = "/api/v1"
 app.include_router(auth.router, prefix=API_PREFIX)
 app.include_router(files.router, prefix=API_PREFIX)
 app.include_router(files.public_router)
+app.include_router(stats.router, prefix=API_PREFIX)
 
 @app.get("/health", include_in_schema=False)
 def health() -> dict[str, str]:

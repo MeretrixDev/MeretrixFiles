@@ -19,7 +19,8 @@ from app.config import get_settings  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services.ratelimit import limiter  # noqa: E402
-from app.services.blobstore import make_blob_storage
+from app.services.blobstore import make_blob_storage   # noqa: E402
+from app.services.stats import stats_cache  # noqa: E402
 
 from sqlalchemy import text
 
@@ -41,6 +42,7 @@ def clean_state():
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
 
+    stats_cache.reset()
     limiter.reset()
     yield
 

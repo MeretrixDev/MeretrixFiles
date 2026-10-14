@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     cleanup_in_app: bool = True
     cleanup_interval_seconds: int = Field(600, ge=10)
 
+    stats_cache_seconds: int = Field(60, ge=0, le=3600)
+
     @property
     def temp_dir(self) -> Path:
         return self.storage_dir / "temp"
