@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.services.stats import stats_cache
+from app.services.diskguard import disk_usage
+
 
 router = APIRouter(tags=["stats"])
 
@@ -22,6 +24,8 @@ class StatsOut(BaseModel):
     saved_bytes: int
     saved_perc: float
     generated_at: datetime
+    accepting_uploads: bool
+    disk_used_perc: float
 
 
 @router.get("/stats", response_model=StatsOut)
@@ -34,6 +38,7 @@ def public_stats(
     if settings.stats_cache_seconds > 0:
         response.headers["Cache-Control"] = f"public, max-age={settings.stats_cache_seconds}"
 
+    total, used, free = disk_usage(settings.storage_dir)
     saved = s.uploaded_bytes - s.stored_bytes
     return StatsOut(
         files=s.files,
@@ -46,5 +51,7 @@ def public_stats(
         saved_bytes=saved,
         saved_perc=round(saved / s.uploaded_bytes * 100, 1) if s.uploaded_bytes else 0.0,
         generated_at=s.generated_at,
+        accepting_uploads=free >= settings.min_free_bytes,
+        disk_used_perc=round(used / total * 100, 1) if total else 0.0,
     )
 

@@ -1,10 +1,12 @@
 import zipfile
+import errno
 
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from collections.abc import Iterator
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, Header, Response, Query, File as FileField
+from fastapi import (APIRouter, Depends, Form, HTTPException, UploadFile,
+                     Header, Response, Query, File as FileField, Request)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, or_
@@ -23,6 +25,7 @@ from app.services.seekable import CorruptBlobError
 from app.services.storage import delete_file, storage_upload, verify_token, QuotaExceededError
 from app.services.policy import TtlNotAllowed, limit_for, resolve_ttl_hours
 from app.services.quota import get_usage
+from app.services.diskguard import InsufficientStorageError, check_free_space
 
 
 router = APIRouter()
@@ -104,6 +107,7 @@ def _read_chunks(upload: UploadFile, size:int) -> Iterator[bytes]:
 
 @router.post("/upload", response_model=UploadResult, status_code=201, dependencies=[Depends(limit_upload)])
 def upload_file(
+    request: Request,
     files: list[UploadFile] = FileField(
         ..., alias="file",
     ),
@@ -134,6 +138,12 @@ def upload_file(
             f"Anonymous files can be stored for at most {e.max_hours} hours. "
             "Sign in to store files longer.",
         )
+
+    expected = int(request.headers.get("content-length") or 0)
+    try:
+        check_free_space(settings.storage_dir, settings.min_free_bytes, expected)
+    except InsufficientStorageError:
+        raise HTTPException(507, "Server storage is full, try again later")
 
     limits = limit_for(user, settings)
     if len(files) == 1:
@@ -171,6 +181,10 @@ def upload_file(
         if user is None and limits.max_size < settings.max_upload_size:
             hint = f" Sign in to upload up to {settings.max_upload_size} bytes."
         raise HTTPException(413, f"Upload exceeds the limit of {limits.max_size} bytes.{hint}")
+    except OSError as e:
+        if e.errno == errno.ENOSPC:
+            raise HTTPException(507, "Server storage is full, try again later")
+        raise
 
     info = _to_info(saved, settings)
     return UploadResult(**info.model_dump(), delete_token=token)

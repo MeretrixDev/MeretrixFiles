@@ -11,6 +11,7 @@ os.environ["MRTRXFILES_MAX_UPLOAD_SIZE"] = str(1024 * 1024)  # 1 МБ, чтоб�
 os.environ["MRTRXFILES_BASE_URL"] = "http://testserver"
 os.environ["MRTRXFILES_SECRET_KEY"] = "test-secret-key-for-pytest-only-0123456789"
 os.environ["MRTRXFILES_FRAME_SIZE"] = str(64 * 1024)
+os.environ["MRTRXFILES_MIN_FREE_BYTES"] = "0"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

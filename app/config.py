@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     anon_max_upload_size: int = Field(100 * 1024**2, ge=1)
     max_files_per_upload: int = Field(50, ge=1, le=1000)
 
+    min_free_bytes: int = Field(5 * 1024 ** 3, ge=0)
+
     compress_level: int = 3
 
     database_url: str = "sqlite:///./meretrixfiles.db"
