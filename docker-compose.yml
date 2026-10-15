@@ -71,6 +71,7 @@ services:
       - "${HTTP_PORT:-8080}:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
 
 volumes:
   pgdata:
