@@ -1,6 +1,8 @@
 .venv/
 .env
+.env.prod
 storage/
 *.db
 __pycache__/
 .idea/
+data/

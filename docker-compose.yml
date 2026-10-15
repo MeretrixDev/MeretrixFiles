@@ -1,0 +1,77 @@
+name: meretrixfiles
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: filehost
+      POSTGRES_DB: filehost
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env.prod}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U filehost -d filehost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: &app-env
+      RUN_MIGRATIONS: "1"
+      MRTRXFILES_DATABASE_URL: postgresql+psycopg://filehost:${POSTGRES_PASSWORD}@db:5432/filehost
+      MRTRXFILES_STORAGE_DIR: /data/storage
+      MRTRXFILES_SECRET_KEY: ${MRTRXFILES_SECRET_KEY:?задайте MRTRXFILES_SECRET_KEY в .env.prod}
+      MRTRXFILES_BASE_URL: ${MRTRXFILES_BASE_URL:?задайте MRTRXFILES_BASE_URL в .env.prod}
+      MRTRXFILES_MAX_UPLOAD_SIZE: "524288000"   # 500 МБ; Nginx держит лимит чуть выше
+      MRTRXFILES_CLEANUP_IN_APP: "false"        # очистку делает отдельный сервис ниже
+    volumes:
+      # Имя тома (по умолчанию) или путь на хосте, например /srv/meretrixfiles/storage
+      - ${STORAGE_PATH:-storage}:/data/storage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  cleanup:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy   # к этому моменту миграции уже применены
+    environment:
+      <<: *app-env
+      RUN_MIGRATIONS: "0"
+    volumes:
+      - ${STORAGE_PATH:-storage}:/data/storage
+    command: ["sh", "-c", "while true; do python -m app.cli purge; sleep 600; done"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  pgdata:
+  storage:
